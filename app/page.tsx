@@ -656,6 +656,7 @@ export default function MobileBack2YouCloud() {
                   <input
                     type="file"
                     accept="image/*"
+                    capture="environment"
                     onChange={(e) => setPhotoFile(e.target.files?.[0] || null)}
                     className="hidden"
                   />
@@ -672,6 +673,7 @@ export default function MobileBack2YouCloud() {
                   <input
                     type="file"
                     accept="video/*"
+                    capture="environment"
                     onChange={(e) => setVideoFile(e.target.files?.[0] || null)}
                     className="hidden"
                   />
