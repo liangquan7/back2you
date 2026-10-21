@@ -207,8 +207,9 @@ export default function MobileBack2YouWatchUI() {
   const [claimProof, setClaimProof] = useState("");
 
   const getDaysRemaining = (createdAt: number) => {
-    const elapsed = Math.floor((Date.now() - createdAt) / DAY_MS);
-    return 30 - elapsed;
+    const now = typeof window !== 'undefined' ? Date.now() : createdAt;
+    const elapsed = Math.floor((now - createdAt) / DAY_MS);
+    return Math.max(0, 30 - elapsed);
   };
 
   // 画布触摸/鼠标拖拽逻辑
