@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   MapPin,
   Plus,
@@ -22,7 +23,6 @@ import {
   Lock,
   Clock,
   Search,
-  Navigation,
 } from "lucide-react";
 
 // 已预填你的 Supabase 云端配置
@@ -64,10 +64,10 @@ interface LostItem {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-// 标准 Apple Watch 六边形蜂窝螺旋坐标算法
+// 标准 Apple Watch 六边形蜂窝螺旋坐标算法（支持无限个气泡不重叠）
 const getHexPosition = (index: number) => {
   if (index === 0) return { x: 0, y: 0 };
-  const spacing = 112;
+  const spacing = 112; // 气泡间距
   let layer = 1;
   let countInPrevLayers = 1;
 
@@ -123,14 +123,13 @@ export default function MobileBack2YouCloud() {
   const [isUploading, setIsUploading] = useState(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
-  // ============================================================================
-  // 新增：左上角伸缩搜索栏 & 半透明结果面板 & 气泡高亮指引状态
-  // ============================================================================
+  // 搜索相关状态
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [showSearchResults, setShowSearchResults] = useState(false);
-  const [highlightedId, setHighlightedId] = useState<string | null>(null);
-  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const [hasSearched, setHasSearched] = useState(false); // 按下搜索后才显示结果面板
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+  const [isFlying, setIsFlying] = useState(false); // 飞向气泡时关闭 CSS transition
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 丝滑拖拽与惯性滑动状态
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -149,7 +148,7 @@ export default function MobileBack2YouCloud() {
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [videoFile, setVideoFile] = useState<File | null>(null);
 
-  // 认领表单状态
+  // 认领表单状态（拆分为姓名 + 学号 Matric No）
   const [claimName, setClaimName] = useState("");
   const [claimMatric, setClaimMatric] = useState("");
   const [claimDesc, setClaimDesc] = useState("");
@@ -175,6 +174,7 @@ export default function MobileBack2YouCloud() {
           locationTag: row.location_tag,
           note: row.note || "",
           createdAt: Number(row.created_at),
+          // 只要有认领记录，状态即为 Claimed
           status: rowClaims.length > 0 ? "Claimed" : row.status,
           claims: rowClaims,
           x: pos.x,
@@ -189,6 +189,7 @@ export default function MobileBack2YouCloud() {
     fetchCloudItems();
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
     };
   }, []);
 
@@ -198,6 +199,7 @@ export default function MobileBack2YouCloud() {
     return Math.max(0, 30 - elapsed);
   };
 
+  // 根据气泡数量动态计算最大可拖动范围
   const maxPanLimit = Math.max(320, Math.ceil(Math.sqrt(items.length)) * 130);
 
   const clampPan = (x: number, y: number) => ({
@@ -206,59 +208,11 @@ export default function MobileBack2YouCloud() {
   });
 
   // ============================================================================
-  // 搜索过滤逻辑与点击结果自动导航到对应 Bubble
-  // ============================================================================
-  const filteredSearchItems = items.filter((item) => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return true;
-    return (
-      item.title.toLowerCase().includes(q) ||
-      item.locationTag.toLowerCase().includes(q) ||
-      item.note.toLowerCase().includes(q)
-    );
-  });
-
-  const handleToggleSearch = () => {
-    if (isSearchOpen) {
-      setIsSearchOpen(false);
-      setShowSearchResults(false);
-      setSearchQuery("");
-    } else {
-      setIsSearchOpen(true);
-      setTimeout(() => searchInputRef.current?.focus(), 150);
-    }
-  };
-
-  const handleSearchSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setShowSearchResults(true);
-  };
-
-  // 点击搜索结果：平滑移动屏幕中心到对应的 Bubble 并高亮闪烁
-  const navigateToBubble = (item: LostItem) => {
-    if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    setIsDragging(false);
-
-    const targetPan = { x: -item.x, y: -item.y };
-    panRef.current = targetPan;
-    setPan(targetPan);
-
-    // 收起半透明搜索面板并高亮目标气泡
-    setShowSearchResults(false);
-    setIsSearchOpen(false);
-    setHighlightedId(item.id);
-    showToast(`Guided to "${item.title}" at ${item.locationTag}`);
-
-    setTimeout(() => {
-      setHighlightedId((prev) => (prev === item.id ? null : prev));
-    }, 4000);
-  };
-
-  // ============================================================================
-  // 60FPS 手机触控拖拽 + Apple Watch 惯性滑行引擎
+  // 核心优化：60FPS 手机触控拖拽 + Apple Watch 惯性滑行引擎
   // ============================================================================
   const handlePointerDown = (e: React.PointerEvent) => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    setIsFlying(false); // 用户触摸时立即接管，中断搜索飞行动画
     setIsDragging(true);
     hasMovedRef.current = false;
     velocityRef.current = { vx: 0, vy: 0 };
@@ -290,6 +244,7 @@ export default function MobileBack2YouCloud() {
       hasMovedRef.current = true;
     }
 
+    // 记录手指滑动速度用于松手后的惯性滑行
     velocityRef.current = {
       vx: ((e.clientX - lastPointRef.current.x) / dt) * 15,
       vy: ((e.clientY - lastPointRef.current.y) / dt) * 15,
@@ -306,8 +261,9 @@ export default function MobileBack2YouCloud() {
     if (!isDragging) return;
     setIsDragging(false);
 
+    // 启动惯性阻尼滑行动画
     const startInertia = () => {
-      velocityRef.current.vx *= 0.92;
+      velocityRef.current.vx *= 0.92; // 摩擦系数
       velocityRef.current.vy *= 0.92;
 
       if (
@@ -331,8 +287,70 @@ export default function MobileBack2YouCloud() {
 
   const centerBoard = () => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    setIsFlying(false);
     panRef.current = { x: 0, y: 0 };
     setPan({ x: 0, y: 0 });
+  };
+
+  // ============================================================================
+  // 搜索功能：过滤 + 飞向目标气泡
+  // ============================================================================
+  // 按 物品名 / 地点 / 备注 过滤（不区分大小写）
+  const searchResults = items.filter((item) => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return false;
+    return (
+      item.title.toLowerCase().includes(q) ||
+      item.locationTag.toLowerCase().includes(q) ||
+      item.note.toLowerCase().includes(q)
+    );
+  });
+
+  const handleSearchSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!searchQuery.trim()) return;
+    setHasSearched(true);
+  };
+
+  const closeSearch = () => {
+    setIsSearchOpen(false);
+    setHasSearched(false);
+    setSearchQuery("");
+  };
+
+  // 平滑飞到目标气泡，让它停在屏幕中心并高亮
+  const flyToItem = (item: LostItem) => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+
+    const from = { ...panRef.current };
+    const to = clampPan(-item.x, -item.y); // 气泡要到中心，pan 就是它坐标的相反数
+    const duration = 600;
+    const startTime = performance.now();
+
+    setIsFlying(true);
+    setHasSearched(false); // 收起结果面板
+
+    setHighlightId(item.id);
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    highlightTimerRef.current = setTimeout(() => setHighlightId(null), 3000);
+
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - startTime) / duration);
+      const ease = 1 - Math.pow(1 - t, 3); // easeOutCubic
+      const next = {
+        x: from.x + (to.x - from.x) * ease,
+        y: from.y + (to.y - from.y) * ease,
+      };
+      panRef.current = next;
+      setPan(next);
+
+      if (t < 1) {
+        rafRef.current = requestAnimationFrame(tick);
+      } else {
+        setIsFlying(false);
+      }
+    };
+    rafRef.current = requestAnimationFrame(tick);
   };
 
   // 上传文件到 Supabase Storage
@@ -402,11 +420,14 @@ export default function MobileBack2YouCloud() {
     }
   };
 
-  // 单人认领并锁定
+  // ============================================================================
+  // 核心优化：只允许 1 人认领，认领后立即锁定并展示完整认领人姓名与 Matric 号码
+  // ============================================================================
   const handleAddClaim = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedItem || !claimName || !claimMatric || !claimDesc) return;
 
+    // 防止重复认领保护
     if (selectedItem.claims.length > 0 || selectedItem.status === "Claimed") {
       showToast("This item has already been claimed!");
       return;
@@ -480,6 +501,7 @@ export default function MobileBack2YouCloud() {
     setTimeout(() => setToastMsg(null), 4000);
   };
 
+  // 判断当前选中的物品是否已被认领
   const isItemAlreadyClaimed =
     selectedItem !== null &&
     (selectedItem.status === "Claimed" || selectedItem.claims.length > 0);
@@ -488,153 +510,144 @@ export default function MobileBack2YouCloud() {
   return (
     <div className="min-h-screen bg-black text-white flex justify-center items-center select-none overflow-hidden">
       <div className="relative w-full max-w-[430px] h-[100dvh] sm:h-[860px] sm:rounded-[48px] sm:border-[8px] sm:border-zinc-800 bg-zinc-950 overflow-hidden shadow-2xl flex flex-col">
-        {/* ============================================================== */}
-        {/* 顶部栏：左上角可伸缩搜索图标 + Search Bar + 半透明搜索结果面板 */}
-        {/* ============================================================== */}
-        <header className="absolute top-0 inset-x-0 z-30 px-4 pt-5 pb-3 bg-gradient-to-b from-black/95 via-black/60 to-transparent pointer-events-none">
-          <div className="flex items-center justify-between gap-2 pointer-events-auto">
-            {/* 左上角放大镜按钮 & 伸缩式 Search Bar */}
-            <div className="flex items-center flex-1 min-w-0">
-              {!isSearchOpen ? (
-                <div className="flex items-center gap-2.5">
-                  <button
-                    type="button"
-                    onClick={handleToggleSearch}
-                    className="w-10 h-10 rounded-full bg-zinc-900/90 border border-zinc-700/80 flex items-center justify-center text-indigo-400 hover:bg-zinc-800 hover:text-white shadow-lg transition active:scale-95"
-                    title="Search Lost Items"
-                  >
-                    <Search className="w-4 h-4" />
-                  </button>
-                  <div>
-                    <h1 className="text-base font-extrabold tracking-tight flex items-center gap-1.5">
-                      Back2You
-                      <span className="text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded-full">
-                        {isSupabaseConfigured ? "Cloud Live" : "Local Demo"}
-                      </span>
-                    </h1>
-                    <p className="text-[10px] text-zinc-400">
-                      Swipe smoothly • Tap bubble or search item
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                <form
-                  onSubmit={handleSearchSubmit}
-                  className="flex items-center w-full bg-zinc-900/90 backdrop-blur-xl border border-indigo-500/50 rounded-full pl-3 pr-1.5 py-1 shadow-2xl transition-all duration-300"
-                >
-                  <Search className="w-4 h-4 text-indigo-400 shrink-0 mr-2" />
+        {/* 顶部栏：左上角放大镜，点击后伸展成搜索栏 */}
+        <header className="absolute top-0 inset-x-0 z-20 px-5 pt-5 pb-3 bg-gradient-to-b from-black/90 via-black/50 to-transparent flex items-center justify-between gap-3 pointer-events-none">
+          <div className="pointer-events-auto flex items-center gap-3 flex-1 min-w-0">
+            <motion.form
+              onSubmit={handleSearchSubmit}
+              initial={false}
+              animate={{ width: isSearchOpen ? "100%" : 40 }}
+              transition={{ type: "spring", stiffness: 380, damping: 34 }}
+              className="flex items-center h-10 rounded-full bg-zinc-900/90 border border-zinc-700 overflow-hidden shrink-0"
+            >
+              <button
+                type={isSearchOpen ? "submit" : "button"}
+                onClick={() => {
+                  if (!isSearchOpen) setIsSearchOpen(true);
+                }}
+                className="w-10 h-10 shrink-0 flex items-center justify-center text-indigo-300"
+                aria-label="Search"
+              >
+                <Search className="w-4 h-4" />
+              </button>
+
+              {isSearchOpen && (
+                <>
                   <input
-                    ref={searchInputRef}
+                    autoFocus
                     type="text"
-                    placeholder="Search item name or place (e.g., DK1, Lab)..."
                     value={searchQuery}
                     onChange={(e) => {
                       setSearchQuery(e.target.value);
-                      setShowSearchResults(true);
+                      setHasSearched(false); // 改关键字后，需要重新按搜索
                     }}
-                    className="w-full bg-transparent text-xs text-white placeholder-zinc-400 focus:outline-none"
+                    placeholder="Search item name or place..."
+                    className="flex-1 min-w-0 bg-transparent text-xs text-white outline-none placeholder:text-zinc-500"
                   />
                   <button
-                    type="submit"
-                    className="bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold px-3 py-1.5 rounded-full shrink-0 ml-1 transition"
-                  >
-                    Search
-                  </button>
-                  <button
                     type="button"
-                    onClick={handleToggleSearch}
-                    className="p-1.5 text-zinc-400 hover:text-white shrink-0 ml-0.5"
+                    onClick={closeSearch}
+                    className="w-9 h-10 shrink-0 flex items-center justify-center text-zinc-400"
+                    aria-label="Close search"
                   >
                     <X className="w-4 h-4" />
                   </button>
-                </form>
+                </>
               )}
-            </div>
+            </motion.form>
 
-            {/* 右上角 30天清理按钮（当搜索栏未展开时显示） */}
+            {/* 搜索栏收起时才显示标题 */}
             {!isSearchOpen && (
-              <button
-                onClick={handleAutoPurge}
-                className="p-2.5 rounded-full bg-zinc-900/90 border border-zinc-700 text-amber-400 hover:bg-zinc-800 transition shrink-0"
-                title="Run 30-Day Auto-Purge"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
+              <div className="min-w-0">
+                <h1 className="text-lg font-extrabold tracking-tight flex items-center gap-1.5">
+                  Back2You
+                  <span className="text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded-full">
+                    {isSupabaseConfigured ? "Cloud Live" : "Local Demo"}
+                  </span>
+                </h1>
+                <p className="text-[11px] text-zinc-400">
+                  Swipe smoothly • Tap bubble for location & video
+                </p>
+              </div>
             )}
           </div>
 
-          {/* 半透明搜索结果面板 (Translucent Results Panel) */}
-          {isSearchOpen && showSearchResults && (
-            <div className="mt-2.5 bg-zinc-900/75 backdrop-blur-xl border border-zinc-700/80 rounded-3xl p-3 max-h-64 overflow-y-auto shadow-2xl pointer-events-auto">
-              <div className="flex items-center justify-between px-1 mb-2">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-300">
-                  Matching Items ({filteredSearchItems.length})
-                </span>
-                <span className="text-[10px] text-zinc-400">
-                  Tap result to locate bubble
-                </span>
-              </div>
+          <button
+            onClick={handleAutoPurge}
+            className="pointer-events-auto p-2 rounded-full bg-zinc-900/90 border border-zinc-700 text-amber-400 hover:bg-zinc-800 transition shrink-0"
+            title="Run 30-Day Auto-Purge"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        </header>
 
-              {filteredSearchItems.length === 0 ? (
-                <div className="text-center py-6 text-xs text-zinc-400">
-                  No lost items found matching &ldquo;{searchQuery}&rdquo;
+        {/* 半透明搜索结果面板 */}
+        <AnimatePresence>
+          {isSearchOpen && hasSearched && (
+            <motion.div
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.18 }}
+              className="absolute top-[72px] inset-x-4 z-30 max-h-[50%] overflow-y-auto rounded-3xl bg-zinc-900/70 backdrop-blur-xl border border-white/10 shadow-2xl p-2"
+            >
+              {searchResults.length === 0 ? (
+                <div className="py-6 text-center text-xs text-zinc-400">
+                  No items found for “{searchQuery.trim()}”
                 </div>
               ) : (
-                <div className="space-y-2">
-                  {filteredSearchItems.map((item) => {
-                    const isClaimed =
+                <>
+                  <div className="px-3 pt-1 pb-2 text-[10px] uppercase tracking-wider text-zinc-400">
+                    {searchResults.length} result
+                    {searchResults.length > 1 ? "s" : ""}
+                  </div>
+                  {searchResults.map((item) => {
+                    const claimed =
                       item.status === "Claimed" || item.claims.length > 0;
                     return (
                       <button
                         key={item.id}
                         type="button"
-                        onClick={() => navigateToBubble(item)}
-                        className="w-full flex items-center justify-between gap-3 p-2 rounded-2xl bg-zinc-950/60 hover:bg-indigo-950/60 border border-zinc-800/80 hover:border-indigo-500/50 transition text-left group"
+                        onClick={() => flyToItem(item)}
+                        className="w-full flex items-center gap-3 p-2 rounded-2xl hover:bg-white/10 active:bg-white/15 transition text-left"
                       >
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <img
-                            src={item.itemPhotoUrl}
-                            alt={item.title}
-                            className="w-11 h-11 rounded-full object-cover border border-zinc-700 shrink-0"
-                          />
-                          <div className="min-w-0">
-                            <div className="text-xs font-bold text-white truncate flex items-center gap-1.5">
-                              <span>{item.title}</span>
-                              {isClaimed && (
-                                <span className="text-[9px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded-full">
-                                  Claimed
-                                </span>
-                              )}
-                            </div>
-                            <div className="text-[11px] text-cyan-300 truncate flex items-center gap-1 mt-0.5">
-                              <MapPin className="w-3 h-3 shrink-0" />
-                              <span>{item.locationTag}</span>
-                            </div>
+                        <img
+                          src={item.itemPhotoUrl}
+                          alt={item.title}
+                          className="w-11 h-11 rounded-full object-cover border border-white/20 shrink-0"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-bold text-white truncate">
+                            {item.title}
+                          </div>
+                          <div className="text-[11px] text-zinc-300 flex items-center gap-1 truncate">
+                            <MapPin className="w-3 h-3 shrink-0 text-indigo-300" />
+                            <span className="truncate">{item.locationTag}</span>
                           </div>
                         </div>
-
-                        <div className="flex items-center gap-1 text-[10px] font-bold text-indigo-400 group-hover:text-cyan-300 shrink-0 pr-1">
-                          <Navigation className="w-3.5 h-3.5" />
-                          <span>Locate</span>
-                        </div>
+                        {claimed && (
+                          <span className="text-[9px] font-bold bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full shrink-0">
+                            Claimed
+                          </span>
+                        )}
                       </button>
                     );
                   })}
-                </div>
+                </>
               )}
-            </div>
+            </motion.div>
           )}
-        </header>
+        </AnimatePresence>
 
         {toastMsg && (
-          <div className="absolute top-20 inset-x-4 z-30 bg-indigo-600/95 text-white text-xs font-medium px-4 py-2.5 rounded-2xl shadow-lg flex items-center justify-center gap-2 pointer-events-none">
+          <div className="absolute top-20 inset-x-4 z-30 bg-indigo-600/95 text-white text-xs font-medium px-4 py-2.5 rounded-2xl shadow-lg flex items-center justify-center gap-2">
             <Sparkles className="w-4 h-4 shrink-0" />
             <span>{toastMsg}</span>
           </div>
         )}
 
         {/* ============================================================== */}
-        {/* Apple Watch 蜂窝桌面 */}
+        {/* Apple Watch 蜂窝桌面：加入 touch-none 与实时帧渲染，解决手机端卡顿 */}
         {/* ============================================================== */}
         <div
           onPointerDown={handlePointerDown}
@@ -649,10 +662,10 @@ export default function MobileBack2YouCloud() {
               const currentX = item.x + pan.x;
               const currentY = item.y + pan.y;
               const dist = Math.sqrt(currentX * currentX + currentY * currentY);
+              // Apple Watch 鱼眼缩放比例：中心最大，向屏幕边缘平滑缩小
               const scale = Math.max(0.52, Math.min(1.15, 1.15 - dist / 380));
               const isClaimed =
                 item.status === "Claimed" || item.claims.length > 0;
-              const isHighlighted = highlightedId === item.id;
 
               return (
                 <button
@@ -666,26 +679,23 @@ export default function MobileBack2YouCloud() {
                   }}
                   style={{
                     transform: `translate3d(${currentX}px, ${currentY}px, 0) scale(${scale})`,
-                    transition: isDragging
-                      ? "none"
-                      : "transform 420ms cubic-bezier(0.2, 0.8, 0.2, 1)",
+                    // 拖动 / 搜索飞行时 0 延迟跟随，其余时候平滑过渡
+                    transition:
+                      isDragging || isFlying
+                        ? "none"
+                        : "transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1)",
                     willChange: "transform",
                   }}
                   className={`pointer-events-auto absolute w-24 h-24 rounded-full p-1 shadow-2xl group focus:outline-none ${
-                    isHighlighted
-                      ? "ring-4 ring-amber-400 bg-gradient-to-tr from-amber-400 via-yellow-300 to-cyan-400 z-20"
-                      : isClaimed
+                    isClaimed
                       ? "bg-gradient-to-tr from-emerald-500 to-teal-300"
                       : "bg-gradient-to-tr from-indigo-500 via-purple-500 to-cyan-400"
                   }`}
                 >
-                  {/* 当从搜索结果跳转过来时，显示醒目的指引标签 */}
-                  {isHighlighted && (
-                    <span className="absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap bg-amber-400 text-slate-950 text-[10px] font-extrabold px-2.5 py-0.5 rounded-full shadow-lg animate-bounce">
-                      📍 {item.title}
-                    </span>
+                  {/* 搜索命中后的高亮脉冲环 */}
+                  {highlightId === item.id && (
+                    <span className="absolute -inset-1 rounded-full ring-4 ring-amber-300/90 animate-ping pointer-events-none" />
                   )}
-
                   <div className="relative w-full h-full rounded-full overflow-hidden bg-zinc-900">
                     <img
                       src={item.itemPhotoUrl}
@@ -828,7 +838,9 @@ export default function MobileBack2YouCloud() {
                 </div>
               </div>
 
-              {/* 认领模块 */}
+              {/* ============================================================== */}
+              {/* 认领模块：如果已被认领，直接显示认领人详细资料卡并关闭表单 */}
+              {/* ============================================================== */}
               <div className="border-t border-zinc-800 pt-4">
                 <h3 className="text-xs font-bold uppercase text-zinc-400 mb-3 flex items-center gap-1.5">
                   <ShieldCheck className="w-4 h-4 text-emerald-400" /> Ownership
@@ -847,6 +859,7 @@ export default function MobileBack2YouCloud() {
                       </span>
                     </div>
 
+                    {/* 认领人姓名与 Matric Number 详细资料 */}
                     <div className="grid grid-cols-2 gap-2.5">
                       <div className="bg-zinc-950/80 border border-zinc-800 rounded-xl p-2.5">
                         <div className="text-[10px] text-zinc-400 flex items-center gap-1">
@@ -869,6 +882,7 @@ export default function MobileBack2YouCloud() {
                       </div>
                     </div>
 
+                    {/* 验证照片与说明详情 */}
                     <div className="bg-zinc-950/80 border border-zinc-800 rounded-xl p-3 flex gap-3 items-start">
                       <img
                         src={activeClaimRecord.proofImageUrl}
@@ -890,6 +904,7 @@ export default function MobileBack2YouCloud() {
                     </div>
                   </div>
                 ) : (
+                  /* 尚未有人认领时，才显示认领表单（仅限第一人认领） */
                   <form
                     onSubmit={handleAddClaim}
                     className="bg-zinc-950 border border-zinc-800 rounded-2xl p-3.5 space-y-2.5"
