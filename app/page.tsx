@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
-import { motion, AnimatePresence } from "framer-motion";
 import {
   MapPin,
   Plus,
@@ -22,7 +21,6 @@ import {
   BadgeCheck,
   Lock,
   Clock,
-  Search,
 } from "lucide-react";
 
 // 已预填你的 Supabase 云端配置
@@ -123,14 +121,6 @@ export default function MobileBack2YouCloud() {
   const [isUploading, setIsUploading] = useState(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
-  // 搜索相关状态
-  const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [hasSearched, setHasSearched] = useState(false); // 按下搜索后才显示结果面板
-  const [highlightId, setHighlightId] = useState<string | null>(null);
-  const [isFlying, setIsFlying] = useState(false); // 飞向气泡时关闭 CSS transition
-  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   // 丝滑拖拽与惯性滑动状态
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
@@ -189,7 +179,6 @@ export default function MobileBack2YouCloud() {
     fetchCloudItems();
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
     };
   }, []);
 
@@ -212,7 +201,6 @@ export default function MobileBack2YouCloud() {
   // ============================================================================
   const handlePointerDown = (e: React.PointerEvent) => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    setIsFlying(false); // 用户触摸时立即接管，中断搜索飞行动画
     setIsDragging(true);
     hasMovedRef.current = false;
     velocityRef.current = { vx: 0, vy: 0 };
@@ -287,70 +275,8 @@ export default function MobileBack2YouCloud() {
 
   const centerBoard = () => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    setIsFlying(false);
     panRef.current = { x: 0, y: 0 };
     setPan({ x: 0, y: 0 });
-  };
-
-  // ============================================================================
-  // 搜索功能：过滤 + 飞向目标气泡
-  // ============================================================================
-  // 按 物品名 / 地点 / 备注 过滤（不区分大小写）
-  const searchResults = items.filter((item) => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return false;
-    return (
-      item.title.toLowerCase().includes(q) ||
-      item.locationTag.toLowerCase().includes(q) ||
-      item.note.toLowerCase().includes(q)
-    );
-  });
-
-  const handleSearchSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!searchQuery.trim()) return;
-    setHasSearched(true);
-  };
-
-  const closeSearch = () => {
-    setIsSearchOpen(false);
-    setHasSearched(false);
-    setSearchQuery("");
-  };
-
-  // 平滑飞到目标气泡，让它停在屏幕中心并高亮
-  const flyToItem = (item: LostItem) => {
-    if (rafRef.current) cancelAnimationFrame(rafRef.current);
-
-    const from = { ...panRef.current };
-    const to = clampPan(-item.x, -item.y); // 气泡要到中心，pan 就是它坐标的相反数
-    const duration = 600;
-    const startTime = performance.now();
-
-    setIsFlying(true);
-    setHasSearched(false); // 收起结果面板
-
-    setHighlightId(item.id);
-    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
-    highlightTimerRef.current = setTimeout(() => setHighlightId(null), 3000);
-
-    const tick = (now: number) => {
-      const t = Math.min(1, (now - startTime) / duration);
-      const ease = 1 - Math.pow(1 - t, 3); // easeOutCubic
-      const next = {
-        x: from.x + (to.x - from.x) * ease,
-        y: from.y + (to.y - from.y) * ease,
-      };
-      panRef.current = next;
-      setPan(next);
-
-      if (t < 1) {
-        rafRef.current = requestAnimationFrame(tick);
-      } else {
-        setIsFlying(false);
-      }
-    };
-    rafRef.current = requestAnimationFrame(tick);
   };
 
   // 上传文件到 Supabase Storage
@@ -510,134 +436,28 @@ export default function MobileBack2YouCloud() {
   return (
     <div className="min-h-screen bg-black text-white flex justify-center items-center select-none overflow-hidden">
       <div className="relative w-full max-w-[430px] h-[100dvh] sm:h-[860px] sm:rounded-[48px] sm:border-[8px] sm:border-zinc-800 bg-zinc-950 overflow-hidden shadow-2xl flex flex-col">
-        {/* 顶部栏：左上角放大镜，点击后伸展成搜索栏 */}
-        <header className="absolute top-0 inset-x-0 z-20 px-5 pt-5 pb-3 bg-gradient-to-b from-black/90 via-black/50 to-transparent flex items-center justify-between gap-3 pointer-events-none">
-          <div className="pointer-events-auto flex items-center gap-3 flex-1 min-w-0">
-            <motion.form
-              onSubmit={handleSearchSubmit}
-              initial={false}
-              animate={{ width: isSearchOpen ? "100%" : 40 }}
-              transition={{ type: "spring", stiffness: 380, damping: 34 }}
-              className="flex items-center h-10 rounded-full bg-zinc-900/90 border border-zinc-700 overflow-hidden shrink-0"
-            >
-              <button
-                type={isSearchOpen ? "submit" : "button"}
-                onClick={() => {
-                  if (!isSearchOpen) setIsSearchOpen(true);
-                }}
-                className="w-10 h-10 shrink-0 flex items-center justify-center text-indigo-300"
-                aria-label="Search"
-              >
-                <Search className="w-4 h-4" />
-              </button>
-
-              {isSearchOpen && (
-                <>
-                  <input
-                    autoFocus
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => {
-                      setSearchQuery(e.target.value);
-                      setHasSearched(false); // 改关键字后，需要重新按搜索
-                    }}
-                    placeholder="Search item name or place..."
-                    className="flex-1 min-w-0 bg-transparent text-xs text-white outline-none placeholder:text-zinc-500"
-                  />
-                  <button
-                    type="button"
-                    onClick={closeSearch}
-                    className="w-9 h-10 shrink-0 flex items-center justify-center text-zinc-400"
-                    aria-label="Close search"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </>
-              )}
-            </motion.form>
-
-            {/* 搜索栏收起时才显示标题 */}
-            {!isSearchOpen && (
-              <div className="min-w-0">
-                <h1 className="text-lg font-extrabold tracking-tight flex items-center gap-1.5">
-                  Back2You
-                  <span className="text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded-full">
-                    {isSupabaseConfigured ? "Cloud Live" : "Local Demo"}
-                  </span>
-                </h1>
-                <p className="text-[11px] text-zinc-400">
-                  Swipe smoothly • Tap bubble for location & video
-                </p>
-              </div>
-            )}
+        {/* 顶部栏 */}
+        <header className="absolute top-0 inset-x-0 z-20 px-5 pt-5 pb-3 bg-gradient-to-b from-black/90 via-black/50 to-transparent flex items-center justify-between pointer-events-none">
+          <div className="pointer-events-auto">
+            <h1 className="text-lg font-extrabold tracking-tight flex items-center gap-1.5">
+              Back2You
+              <span className="text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded-full">
+                {isSupabaseConfigured ? "Cloud Live" : "Local Demo"}
+              </span>
+            </h1>
+            <p className="text-[11px] text-zinc-400">
+              Swipe smoothly • Tap bubble for location & video
+            </p>
           </div>
 
           <button
             onClick={handleAutoPurge}
-            className="pointer-events-auto p-2 rounded-full bg-zinc-900/90 border border-zinc-700 text-amber-400 hover:bg-zinc-800 transition shrink-0"
+            className="pointer-events-auto p-2 rounded-full bg-zinc-900/90 border border-zinc-700 text-amber-400 hover:bg-zinc-800 transition"
             title="Run 30-Day Auto-Purge"
           >
             <Trash2 className="w-4 h-4" />
           </button>
         </header>
-
-        {/* 半透明搜索结果面板 */}
-        <AnimatePresence>
-          {isSearchOpen && hasSearched && (
-            <motion.div
-              initial={{ opacity: 0, y: -8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.18 }}
-              className="absolute top-[72px] inset-x-4 z-30 max-h-[50%] overflow-y-auto rounded-3xl bg-zinc-900/70 backdrop-blur-xl border border-white/10 shadow-2xl p-2"
-            >
-              {searchResults.length === 0 ? (
-                <div className="py-6 text-center text-xs text-zinc-400">
-                  No items found for “{searchQuery.trim()}”
-                </div>
-              ) : (
-                <>
-                  <div className="px-3 pt-1 pb-2 text-[10px] uppercase tracking-wider text-zinc-400">
-                    {searchResults.length} result
-                    {searchResults.length > 1 ? "s" : ""}
-                  </div>
-                  {searchResults.map((item) => {
-                    const claimed =
-                      item.status === "Claimed" || item.claims.length > 0;
-                    return (
-                      <button
-                        key={item.id}
-                        type="button"
-                        onClick={() => flyToItem(item)}
-                        className="w-full flex items-center gap-3 p-2 rounded-2xl hover:bg-white/10 active:bg-white/15 transition text-left"
-                      >
-                        <img
-                          src={item.itemPhotoUrl}
-                          alt={item.title}
-                          className="w-11 h-11 rounded-full object-cover border border-white/20 shrink-0"
-                        />
-                        <div className="min-w-0 flex-1">
-                          <div className="text-xs font-bold text-white truncate">
-                            {item.title}
-                          </div>
-                          <div className="text-[11px] text-zinc-300 flex items-center gap-1 truncate">
-                            <MapPin className="w-3 h-3 shrink-0 text-indigo-300" />
-                            <span className="truncate">{item.locationTag}</span>
-                          </div>
-                        </div>
-                        {claimed && (
-                          <span className="text-[9px] font-bold bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full shrink-0">
-                            Claimed
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </>
-              )}
-            </motion.div>
-          )}
-        </AnimatePresence>
 
         {toastMsg && (
           <div className="absolute top-20 inset-x-4 z-30 bg-indigo-600/95 text-white text-xs font-medium px-4 py-2.5 rounded-2xl shadow-lg flex items-center justify-center gap-2">
@@ -679,11 +499,10 @@ export default function MobileBack2YouCloud() {
                   }}
                   style={{
                     transform: `translate3d(${currentX}px, ${currentY}px, 0) scale(${scale})`,
-                    // 拖动 / 搜索飞行时 0 延迟跟随，其余时候平滑过渡
-                    transition:
-                      isDragging || isFlying
-                        ? "none"
-                        : "transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1)",
+                    // 拖动时 0 延迟跟随手指，松手居中时平滑过渡
+                    transition: isDragging
+                      ? "none"
+                      : "transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1)",
                     willChange: "transform",
                   }}
                   className={`pointer-events-auto absolute w-24 h-24 rounded-full p-1 shadow-2xl group focus:outline-none ${
@@ -692,10 +511,6 @@ export default function MobileBack2YouCloud() {
                       : "bg-gradient-to-tr from-indigo-500 via-purple-500 to-cyan-400"
                   }`}
                 >
-                  {/* 搜索命中后的高亮脉冲环 */}
-                  {highlightId === item.id && (
-                    <span className="absolute -inset-1 rounded-full ring-4 ring-amber-300/90 animate-ping pointer-events-none" />
-                  )}
                   <div className="relative w-full h-full rounded-full overflow-hidden bg-zinc-900">
                     <img
                       src={item.itemPhotoUrl}
